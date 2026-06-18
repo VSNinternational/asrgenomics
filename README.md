@@ -1,0 +1,420 @@
+# ASRgenomics <img src="man/figures/logo.png" align="right" height="40" alt="ASRgenomics logo" />
+
+<!-- badges: start -->
+[![R](https://img.shields.io/badge/R-%3E%3D%204.1.0-blue.svg)](https://www.r-project.org/)
+[![CRAN status](https://www.r-pkg.org/badges/version/ASRgenomics)](https://CRAN.R-project.org/package=ASRgenomics)
+[![Lifecycle: stable](https://img.shields.io/badge/lifecycle-stable-brightgreen.svg)](https://lifecycle.r-lib.org/articles/stages.html#stable)
+[![GitHub release](https://img.shields.io/github/v/release/VSNi/ASRgenomics?include_prereleases&sort=semver)](https://github.com/VSNi/ASRgenomics/releases)
+<!-- badges: end -->
+
+**Complementary genomic functions for analytical pipelines in plant and animal breeding**
+
+## Description
+
+The `ASRgenomics` package presents a series of molecular and genetic routines in the
+[**R**](https://www.r-project.org/) environment with the aim of assisting in analytical
+pipelines **before** and **after** the use of
+[**ASReml-R**](https://asreml.kb.vsni.co.uk/) or another library to perform analyses such
+as **Genomic Selection** or **Genome-Wide Association Analyses (GWAS)**.
+
+The package covers the complete workflow from raw SNP data to relationship matrices ready
+for mixed-model analyses, including quality control, recoding, genomic matrix construction,
+matrix diagnostics, visualisation, and integration with pedigree-based approaches. A
+comprehensive manual with methods and examples is available at
+[VSNi Knowledge Base](https://asreml.kb.vsni.co.uk/wp-content/uploads/sites/3/ASRgenomics_Manual.pdf).
+
+Main features:
+
+- SNP data quality control via `qc.filtering()`.
+- Marker recoding from bi-allelic nucleotide bases to 0/1/2 via `snp.recode()`.
+- Marker pruning based on LD correlation via `snp.pruning()`.
+- Genomic relationship matrix construction (additive and dominant) via `G.matrix()`.
+- Matrix tune-up (blending, bending, alignment) via `G.tuneup()`.
+- Inversion of the genomic relationship matrix via `G.inverse()`.
+- Hybrid **H** matrix construction and inversion via `H.matrix()` and `H.inverse()`.
+- Kinship matrix diagnostics, heatmap, and PCA via `kinship.diagnostics()`,
+  `kinship.heatmap()`, and `kinship.pca()`.
+- SNP-based PCA via `snp.pca()`.
+- Matching of kinship matrices against pedigree or phenotypic data via `match.G2A()`
+  and `match.kinship2pheno()`.
+- Conditional prediction of BLUPs for unobserved individuals via `G.predict()`.
+- Synthetic cross generation via `synthetic.cross()`.
+- Sparse/full matrix format conversion via `full2sparse()` and `sparse2full()`.
+
+## Installation
+
+You can install the stable version of `ASRgenomics` from
+[CRAN](https://CRAN.R-project.org/package=ASRgenomics) with:
+
+``` r
+install.packages("ASRgenomics")
+```
+
+Or install the development version from [GitHub](https://github.com/) with:
+
+``` r
+# install.packages("remotes")
+remotes::install_url("https://github.com/VSNinternational/asrimpute/releases/latest/download/ASRgenomics_latest.tar.gz")
+```
+
+### Dependencies
+
+`ASRgenomics` depends on **R (>= 4.1.0)** and on the following packages:
+`AGHmatrix`, `cowplot`, `crayon`, `data.table`, `ellipse`, `factoextra`,
+`ggplot2`, `Matrix`, `scattermore` and `superheat`.
+
+## Loading the package
+
+Once installed, load the package as usual:
+
+``` r
+library(ASRgenomics)
+```
+
+A quick check that the package is ready:
+
+``` r
+?ASRgenomics
+ls("package:ASRgenomics")
+```
+
+## Overview
+
+This tutotial organizes the `ASRgenomics` features into five main steps of a typical genomic workflow: 
+1) input data and QC;
+2) genomic matrix construction;
+3) matrix diagnostics and visualization; 
+4) integration with pedigree data;
+5) downstream utilities.  
+
+The sections below walk through each stage with minimal working examples using the datasets shipped with the package.
+
+### 1. Input data
+
+`ASRgenomics` expects the SNP marker data as a numeric matrix `M` of dimensions
+**n × p**, with **n individuals on the rows** and **p markers on the columns**. Row
+names must hold the individual identifiers and column names the marker identifiers. Markers (Allele
+dosages) are encoded as integers **`0`**, **`1`**, and **`2`**.
+
+The package ships with several demonstration datasets that can be used as templates:
+
+| Object         | Description |
+|----------------|-------------|
+| `geno.apple`   | Genotypic data from 247 apple clones × 2,828 SNP markers (no missing values) |
+| `geno.pine655` | Genotypic data from 655 Loblolly Pine individuals × 4,853 SNP markers (with missing values as `-9`)|
+| `geno.pine926` | Genotypic data from 926 Loblolly Pine individuals × 4,853 SNP markers (with missing values as `-9`)|
+| `geno.salmon`  | Genotypic data from 1,481 Atlantic salmon × 17,156 SNP markers (with missing values as `NA`) |
+| `pheno.apple`  | Phenotypic data for the apple dataset |
+| `pheno.pine`   | Phenotypic data for the pine dataset |
+| `pheno.salmon` | Phenotypic data for the Atlantic salmon dataset |
+| `ped.pine`     | Pedigree data for the pine dataset |
+| `ped.salmon`   | Pedigree data for the Atlantic salmon dataset |
+
+``` r
+# Load example datasets
+data(geno.salmon)
+data(pheno.salmon)
+data(ped.salmon)
+```
+
+### 2. SNP quality control and preparation
+
+#### 2.a. Recoding from nucleotide bases
+
+When raw data arrives as bi-allelic nucleotide bases (AA, AG, GG, …), use `snp.recode()`
+to convert it to the 0/1/2 dosage encoding required by all downstream functions. If no
+map is provided, a dummy one-chromosome map is generated automatically.
+
+``` r
+# Recode a character matrix with ATGC bases to 0/1/2
+M_recoded <- snp.recode(M = M_raw, na.string = "NN")$M.clean
+```
+
+#### 2.b. Quality control filtering
+
+`qc.filtering()` reads the molecular matrix and applies a series of optional filters in two
+passes, removing markers and individuals that fail the specified thresholds for call rate,
+minor allele frequency (MAF), observed heterozygosity, and inbreeding (Fis). An optional
+mean imputation for the residual missing values is also available (see also the ASRimpute 
+package for more imputation options).
+
+``` r
+# Apply QC filters
+qc <- qc.filtering(
+  M = geno.salmon,
+  maf = 0.02,
+  marker.callrate = 0.10, 
+  ind.callrate = 0.20,
+  heterozygosity = 0.9, 
+  Fis = 0.4,
+  impute = TRUE
+)
+
+# Retrieve clean matrix
+M_clean <- qc$M.clean
+dim(M_clean)
+```
+
+The function returns a list with the cleaned matrix `$M.clean`, the filtered map (if
+provided), and a set of diagnostic plots for missing data, MAF, heterozygosity, and Fis.
+
+#### 2.c. Marker pruning
+
+`snp.pruning()` reduces the number of redundant markers by removing those with pairwise
+correlation above a given threshold within sliding windows, retaining the marker with the
+highest call rate or MAF among each correlated pair.
+
+``` r
+# Prune markers with pairwise r² > 0.95 in windows of 50, step 5
+pruned <- snp.pruning(
+  M           = M_clean,
+  pruning.thr = 0.95,
+  window.n    = 50,
+  overlap.n   = 5, 
+  seed = 123
+)
+
+M_pruned <- pruned$Mpruned
+```
+
+### 3. Genomic relationship matrices
+
+#### 3.a. Building the G matrix
+
+`G.matrix()` constructs the genomic numerator relationship matrix for additive
+(VanRaden or Yang) or dominant (Su or Vitezica) relationships.
+
+``` r
+# Additive G matrix by VanRaden (default)
+G <- G.matrix(M = M_pruned, method = "VanRaden")$G
+G[1:5, 1:5]
+
+# Dominant G matrix by Vitezica
+D <- G.matrix(M = M_pruned, method = "Vitezica")$G
+D[1:5, 1:5]
+```
+
+For use directly in **ASReml-R**, the matrix can be returned in sparse form:
+
+``` r
+G_sparse <- G.matrix(M = M_pruned, sparseform = TRUE)$G.sparse
+head(G_sparse)
+```
+
+#### 3.b. Tuning up the G matrix
+
+Before inverting, a **G** matrix may need to be made positive definite or brought closer
+to the pedigree-based **A** matrix. `G.tuneup()` supports three operations: *bending*
+(eigenvalue correction to ensure positive definiteness), *blending* (weighted average
+with **I** or **A**), and *alignment* (scaling to match **A**).
+
+``` r
+# Bending: make G near positive definite
+G_bent <- G.tuneup(G = G, bend = TRUE)$Gb
+
+# Blending: mix 98% G with 2% identity
+G_blended <- G.tuneup(G = G, blend = TRUE, pblend = 0.02)$Gb
+```
+
+#### 3.c. Inverting the G matrix
+
+`G.inverse()` obtains the inverse of **G** and can optionally return it in sparse form
+ready for **ASReml-R**. It also reports the reciprocal condition number to flag
+ill-conditioned matrices.
+
+``` r
+# Full-form inverse
+Ginv <- G.inverse(G = G)$Ginv
+
+# Sparse-form inverse (for use in ASReml-R)
+Ginv_sparse <- G.inverse(G = G, sparseform = TRUE)$Ginv.sparse
+```
+
+#### 3.d. Hybrid H matrix
+
+The **H** matrix (single-step GBLUP) combines pedigree and genomic information.
+`H.matrix()` constructs **H** given **A**, **A⁻¹** and **G⁻¹`, while `H.inverse()`
+returns its inverse directly.  
+
+In order to obtain the pedigree-based A matrix we will use the function Amatrix() from the
+library AGHmatrix (Amadeu et al. 2016):
+
+``` r
+# Build the A matrix
+A <- AGHmatrix::Amatrix(data = ped.salmon)
+
+# Compute H inverse in sparse form
+Hinv_sparse <- H.inverse(
+  A         = A,
+  Ginv      = Ginv,
+  sparseform = TRUE
+)$Hinv.sparse
+```
+
+### 4. Diagnostics and visualisation
+
+#### 4.a. Kinship matrix diagnostics
+
+`kinship.diagnostics()` reports summary statistics for any kinship matrix **K** and flags
+suspicious individuals (abnormal diagonal values or potential duplicates). Optionally,
+flagged individuals can be removed to return a cleaned matrix.
+
+``` r
+diag_out <- kinship.diagnostics(
+  K                  = G,
+  diagonal.thr.large = 1.2,
+  diagonal.thr.small = 0.8,
+  duplicate.thr      = 0.95,
+  plots              = TRUE
+)
+
+# Flagged individuals
+diag_out$list.diagonal
+diag_out$list.duplicate
+```
+
+#### 4.b. Kinship heatmap
+
+`kinship.heatmap()` produces an enhanced heatmap with optional hierarchical or k-means
+dendrogram to visualise population structure in a kinship matrix.
+
+``` r
+kinship.heatmap(K = G, dendrogram = TRUE, clustering.method = "hierarchical")
+```
+
+#### 4.c. Principal Component Analysis
+
+Both a kinship-based and a marker-based PCA are available.
+
+``` r
+# PCA from kinship matrix
+kpca <- kinship.pca(K = G, ncp = 5)
+kpca$plot.pca
+
+# PCA from SNP matrix
+spca <- snp.pca(M = M_pruned, ncp = 10, label = FALSE)
+spca$plot.pca
+```
+
+Group colouring and confidence ellipses can be added by supplying a factor vector to the
+`groups` and `ellipses` arguments in both functions.
+
+### 5. Matching utilities
+
+#### 5.a. Matching G against A
+
+Before building the **H** matrix or comparing pedigree and genomic relationships, the
+**G** and **A** matrices must share exactly the same individuals in the same order.
+`match.G2A()` aligns them and optionally flags inconsistent entries.
+
+``` r
+matched <- match.G2A(A = A, G = G, clean = TRUE, ord = TRUE)
+
+G_matched <- matched$G.clean
+A_matched <- matched$A.clean
+```
+
+#### 5.b. Matching a kinship matrix to phenotypic data
+
+`match.kinship2pheno()` checks that a kinship matrix and a phenotypic data frame share
+the same individuals and, if requested, orders the matrix rows/columns to match the
+phenotypic data — a requirement for many mixed-model implementations.
+
+``` r
+mk <- match.kinship2pheno(
+  K          = G,
+  pheno.data = pheno.apple,
+  indiv      = "Genotype",
+  clean      = TRUE,
+  ord        = TRUE
+)
+
+G_ordered <- mk$K.clean
+```
+
+### 6. Additional utilities
+
+#### 6.a. Predicting BLUPs for unobserved individuals
+
+`G.predict()` uses the multivariate normal conditional distribution to predict breeding
+values (or any other random effects) for individuals not included in the original model
+fit, given the **G** matrix and the known BLUPs with their variance-covariance matrix.
+
+``` r
+G.predict(G = G, gy = known_blups, vcov.gy = vcov_matrix)
+```
+
+#### 6.b. Synthetic crosses
+
+`synthetic.cross()` generates the expected marker matrix for hypothetical offspring from
+a user-supplied cross pedigree, using the parental genotypes stored in **M**. This is
+useful for genomic selection of yet-to-be-made crosses.
+
+``` r
+# Create hypothetical cross offspring
+M_cross <- synthetic.cross(
+  M      = M_pruned,
+  ped    = cross_pedigree,
+  indiv  = "offspring",
+  mother = "mother",
+  father = "father"
+)$M.cross
+```
+
+#### 6.c. Sparse/full format conversion
+
+`full2sparse()` converts a full symmetric matrix to the lower-triangular sparse format
+(with `rowNames` and `colNames` attributes) used by **ASReml-R**, and `sparse2full()`
+reverses the operation.
+
+``` r
+# Convert to sparse form
+G_sparse <- full2sparse(G)
+
+# Convert back to full form
+G_full   <- sparse2full(G_sparse)
+```
+
+## Bibliography
+
+**VanRaden P.M.** (2008). *Efficient methods to compute genomic predictions*. J Dairy Sci
+91(11):4414–4423. doi:[10.3168/jds.2007-0980](https://doi.org/10.3168/jds.2007-0980)
+
+**Amadeu R.R., Cellon C., Olmstead J.W., Garcia A.A.F., Resende M.F.R. and Munoz P.R.**
+(2016). *AGHmatrix: R package to construct relationship matrices for autotetraploid and
+diploid species*. The Plant Genome 9(3).
+doi:[10.3835/plantgenome2016.01.0009](https://doi.org/10.3835/plantgenome2016.01.0009)
+
+**Misztal I., Legarra A. and Aguilar I.** (2009). *Computing procedures for genetic
+evaluation including phenotypic, full pedigree, and genomic information*. J Dairy Sci
+92(9):4648–4655. doi:[10.3168/jds.2009-2064](https://doi.org/10.3168/jds.2009-2064)
+
+## Citation
+
+If you use `ASRgenomics` in your research, please cite it as:
+
+> Gezan, S.A., Oliveira, A.A., Galli, G., and Murray, D. (2022). *ASRgenomics: Complementary
+> Genomic Functions*. Version 1.1.6. VSN International, Hemel Hempstead, United Kingdom.
+> <https://asreml.kb.vsni.co.uk/wp-content/uploads/sites/3/ASRgenomics_Manual.pdf>
+
+A BibTeX entry can be obtained at any time from R with:
+
+``` r
+citation("ASRgenomics")
+```
+
+## Contact
+
+Maintained by the VSN International team. For questions, bug reports or feature requests,
+please open an issue on GitHub or contact:
+
+- **Salvador Gezan** (maintainer) — [salvador.gezan@vsni.co.uk](mailto:salvador.gezan@vsni.co.uk)
+- **Amanda Avelar de Oliveira** — [support@vsni.co.uk](mailto:support@vsni.co.uk)
+- **Giovanni Galli** — [giovanni.galli@vsni.co.uk](mailto:giovanni.galli@vsni.co.uk)
+- **Darren Murray** — [darren.murray@vsni.co.uk](mailto:darren.murray@vsni.co.uk)
+- **General support** — [support@vsni.co.uk](mailto:support@vsni.co.uk)
+
+## License
+
+`ASRgenomics` is released under the [MIT License](LICENSE.md).
+Copyright © 2026 VSN International.
